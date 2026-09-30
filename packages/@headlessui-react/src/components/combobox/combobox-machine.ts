@@ -1,4 +1,4 @@
-import { Machine } from '../../machine'
+import { Machine, batch } from '../../machine'
 import { ActionTypes as StackActionTypes, stackMachines } from '../../machines/stack-machine'
 import type { EnsureArray } from '../../types'
 import { Focus, calculateActiveIndex } from '../../utils/calculate-active-index'
@@ -92,8 +92,8 @@ export enum ActionTypes {
   GoToOption,
   SetTyping,
 
-  RegisterOption,
-  UnregisterOption,
+  RegisterOptions,
+  UnregisterOptions,
 
   DefaultToFirstOption,
 
@@ -156,10 +156,10 @@ type Actions<T> =
       trigger?: ActivationTrigger
     }
   | {
-      type: ActionTypes.RegisterOption
-      payload: { id: string; dataRef: ComboboxOptionDataRef<T> }
+      type: ActionTypes.RegisterOptions
+      options: { id: string; dataRef: ComboboxOptionDataRef<T> }[]
     }
-  | { type: ActionTypes.UnregisterOption; id: string }
+  | { type: ActionTypes.UnregisterOptions; ids: string[] }
   | { type: ActionTypes.DefaultToFirstOption; value: boolean }
   | { type: ActionTypes.SetActivationTrigger; trigger: ActivationTrigger }
   | {
@@ -314,25 +314,28 @@ let reducers: {
       __demoMode: false,
     }
   },
-  [ActionTypes.RegisterOption]: (state, action) => {
+  [ActionTypes.RegisterOptions]: (state, action) => {
+    if (action.options.length === 0) return state
+
     if (state.dataRef.current?.virtual) {
       return {
         ...state,
-        options: [...state.options, action.payload],
+        options: [...state.options, ...action.options],
       }
     }
 
-    let option = action.payload
-
     let adjustedState = adjustOrderedState(state, (options) => {
-      options.push(option)
+      options.push(...action.options)
       return options
     })
 
-    // Check if we need to make the newly registered option active.
+    // Check if we need to make one of the newly registered options active.
     if (state.activeOptionIndex === null) {
-      if (state.dataRef.current.isSelected?.(action.payload.dataRef.current.value)) {
-        adjustedState.activeOptionIndex = adjustedState.options.indexOf(option)
+      for (let option of action.options) {
+        if (state.dataRef.current.isSelected?.(option.dataRef.current.value)) {
+          adjustedState.activeOptionIndex = adjustedState.options.indexOf(option)
+          break
+        }
       }
     }
 
@@ -348,18 +351,20 @@ let reducers: {
 
     return nextState
   },
-  [ActionTypes.UnregisterOption]: (state, action) => {
+  [ActionTypes.UnregisterOptions]: (state, action) => {
+    if (action.ids.length === 0) return state
+
+    let ids = new Set(action.ids)
+
     if (state.dataRef.current?.virtual) {
       return {
         ...state,
-        options: state.options.filter((option) => option.id !== action.id),
+        options: state.options.filter((option) => !ids.has(option.id)),
       }
     }
 
     let adjustedState = adjustOrderedState(state, (options) => {
-      let idx = options.findIndex((option) => option.id === action.id)
-      if (idx !== -1) options.splice(idx, 1)
-      return options
+      return options.filter((option) => !ids.has(option.id))
     })
 
     return {
@@ -511,6 +516,35 @@ export class ComboboxMachine<T> extends Machine<State<T>, Actions<T>> {
     })
   }
 
+  private pendingRegistrations = new Map<string, ComboboxOptionDataRef<T>>()
+  private pendingUnregistrations = new Set<string>()
+
+  private syncOptions = batch(() => [
+    (id: string, dataRef: ComboboxOptionDataRef<T> | null) => {
+      this.pendingRegistrations.delete(id)
+      if (dataRef) {
+        this.pendingRegistrations.set(id, dataRef)
+      } else {
+        this.pendingUnregistrations.add(id)
+      }
+    },
+    () => this.flushOptions(),
+  ])
+
+  // Interactions can run immediately after a synchronous React commit, before
+  // the registration microtask. Flush before reading an option index.
+  flushOptions() {
+    let ids = Array.from(this.pendingUnregistrations)
+    let options = Array.from(this.pendingRegistrations, ([id, dataRef]) => ({ id, dataRef }))
+    this.pendingUnregistrations.clear()
+    this.pendingRegistrations.clear()
+
+    // Apply removals first so an option unmounted and remounted in the same
+    // turn (including StrictMode effect replay) keeps its latest registration.
+    if (ids.length > 0) this.send({ type: ActionTypes.UnregisterOptions, ids })
+    if (options.length > 0) this.send({ type: ActionTypes.RegisterOptions, options })
+  }
+
   actions = {
     onChange: (newValue: T) => {
       let { onChange, compare, mode, value } = this.state.dataRef.current
@@ -534,7 +568,14 @@ export class ComboboxMachine<T> extends Machine<State<T>, Actions<T>> {
       })
     },
     registerOption: (id: string, dataRef: ComboboxOptionDataRef<T>) => {
-      this.send({ type: ActionTypes.RegisterOption, payload: { id, dataRef } })
+      // Virtual comboboxes intentionally keep registration synchronous.
+      let virtual = this.state.virtual !== null
+
+      if (virtual) {
+        this.send({ type: ActionTypes.RegisterOptions, options: [{ id, dataRef }] })
+      } else {
+        this.syncOptions(id, dataRef)
+      }
       return () => {
         // When we are unregistering the currently active option, then we also have to make sure to
         // reset the `defaultToFirstOption` flag, so that visually something is selected and the next
@@ -546,19 +587,27 @@ export class ComboboxMachine<T> extends Machine<State<T>, Actions<T>> {
         // to the previous / next item in list if we know the direction of the keyboard navigation,
         // but that might be too complex/confusing from an end users perspective.
         if (
-          this.state.activeOptionIndex ===
-          this.state.dataRef.current.calculateIndex(dataRef.current.value)
+          virtual
+            ? this.state.activeOptionIndex ===
+              this.state.dataRef.current.calculateIndex(dataRef.current.value)
+            : this.state.activeOptionIndex !== null &&
+              this.state.options[this.state.activeOptionIndex]?.dataRef === dataRef
         ) {
           this.send({ type: ActionTypes.DefaultToFirstOption, value: true })
         }
 
-        this.send({ type: ActionTypes.UnregisterOption, id })
+        if (virtual) {
+          this.send({ type: ActionTypes.UnregisterOptions, ids: [id] })
+        } else {
+          this.syncOptions(id, null)
+        }
       }
     },
     goToOption: (
       focus: { focus: Focus.Specific; idx: number } | { focus: Exclude<Focus, Focus.Specific> },
       trigger?: ActivationTrigger
     ) => {
+      this.flushOptions()
       this.send({ type: ActionTypes.DefaultToFirstOption, value: false })
       return this.send({ type: ActionTypes.GoToOption, ...focus, trigger })
     },
@@ -571,6 +620,7 @@ export class ComboboxMachine<T> extends Machine<State<T>, Actions<T>> {
       this.state.dataRef.current.onClose?.()
     },
     openCombobox: () => {
+      this.flushOptions()
       this.send({ type: ActionTypes.OpenCombobox })
       this.send({ type: ActionTypes.DefaultToFirstOption, value: true })
     },
@@ -578,6 +628,7 @@ export class ComboboxMachine<T> extends Machine<State<T>, Actions<T>> {
       this.send({ type: ActionTypes.SetActivationTrigger, trigger })
     },
     selectActiveOption: () => {
+      this.flushOptions()
       let activeOptionIndex = this.selectors.activeOptionIndex(this.state)
       if (activeOptionIndex === null) return
 
