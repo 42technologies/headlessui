@@ -702,6 +702,7 @@ function InputFn<
         event.preventDefault()
         event.stopPropagation()
 
+        machine.flushOptions()
         if (machine.selectors.activeOptionIndex(machine.state) === null) {
           machine.actions.closeCombobox()
           return

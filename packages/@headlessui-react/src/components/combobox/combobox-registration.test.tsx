@@ -27,6 +27,46 @@ afterAll(() => jest.restoreAllMocks())
 describe.each([false, true])('grouped option registration (StrictMode: %s)', (strict) => {
   let Wrapper = strict ? StrictMode : Fragment
 
+  it.each([false, true])(
+    'selects newly mounted options on Enter before the registration batch runs (multiple: %s)',
+    async (multiple) => {
+      let onChange = jest.fn()
+
+      function Example({ options }: { options: string[] }) {
+        return (
+          <Wrapper>
+            <Combobox multiple={multiple} onChange={onChange}>
+              <ComboboxInput />
+              <ComboboxButton>Open</ComboboxButton>
+              <ComboboxOptions>
+                <div role="group" aria-label="Fruit">
+                  {options.map((value) => (
+                    <ComboboxOption key={value} value={value} disabled={value === 'Apple'}>
+                      {value}
+                    </ComboboxOption>
+                  ))}
+                </div>
+              </ComboboxOptions>
+            </Combobox>
+          </Wrapper>
+        )
+      }
+
+      let { rerender } = render(<Example options={[]} />)
+      await click(getComboboxButton())
+
+      // Keep the commit and Enter in the same task so registration is still queued.
+      rerender(<Example options={['Apple', 'Banana']} />)
+      fireEvent.keyDown(getComboboxInput()!, Keys.Enter)
+      await act(async () => {})
+
+      expect(onChange).toHaveBeenCalledTimes(1)
+      expect(onChange).toHaveBeenCalledWith(multiple ? ['Banana'] : 'Banana')
+      expect(getComboboxInput()).toHaveAttribute('aria-expanded', multiple ? 'true' : 'false')
+      if (multiple) assertActiveComboboxOption(getComboboxOptions()[1])
+    }
+  )
+
   it('preserves multiple selection and keyboard order while filtering across groups', async () => {
     let onChange = jest.fn()
     let groups = [
