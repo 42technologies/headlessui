@@ -1,0 +1,43 @@
+{
+  "name": "@42technologies/headless-react",
+  "version": "2.2.10-42.1",
+  "description": "A set of completely unstyled, fully accessible UI components for React, designed to integrate beautifully with Tailwind CSS.",
+  "main": "dist/index.cjs",
+  "typings": "dist/index.d.ts",
+  "module": "dist/headlessui.esm.js",
+  "license": "MIT",
+  "files": [
+    "README.md",
+    "dist"
+  ],
+  "exports": {
+    "types": {
+      "import": "./dist/index.d.ts",
+      "require": "./dist/index.d.cts"
+    },
+    "import": "./dist/headlessui.esm.js",
+    "require": "./dist/index.cjs"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/42technologies/headlessui.git",
+    "directory": "packages/@headlessui-react"
+  },
+  "peerDependencies": {
+    "react": "^18 || ^19 || ^19.0.0-rc",
+    "react-dom": "^18 || ^19 || ^19.0.0-rc"
+  },
+  "dependencies": {
+    "@floating-ui/react": "^0.26.16",
+    "@react-aria/focus": "^3.20.2",
+    "@react-aria/interactions": "^3.25.0",
+    "@tanstack/react-virtual": "^3.13.9",
+    "use-sync-external-store": "^1.5.0"
+  },
+  "gitHead": "185e28a5d50e642d18777f02259425075ce86fa1"
+}
